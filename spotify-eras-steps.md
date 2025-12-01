@@ -250,49 +250,107 @@ In `app.py`, create a new endpoint `POST /process/<session_id>`:
 
 ## PHASE 3: Backend — LLM Naming & Summarization
 
+### Step 3.0 — Update Environment Configuration
+Add to `.env.example`:
+```
+# LLM Configuration
+LLM_PROVIDER=openai  # or anthropic
+LLM_MODEL=gpt-4o-mini  # or claude-3-haiku-20240307
+LLM_TIMEOUT=30  # seconds per request
+```
+
 ### Step 3.1 — Create LLM Service Setup
 In `llm_service.py`:
-- Load API key from environment variable
-- Create function to initialize client
+- Import required libraries: `os`, `time`, `re`, `json`
+- Load configuration from environment:
+  - `LLM_PROVIDER` (default: "openai")
+  - `LLM_MODEL` (default: "gpt-4o-mini" for OpenAI, "claude-3-haiku-20240307" for Anthropic)
+  - `LLM_TIMEOUT` (default: 30 seconds)
+- Create `get_client()` function that initializes the appropriate client based on provider
+- Raise clear error if API key is missing: `raise ValueError("OPENAI_API_KEY not set")`
+- Create retry decorator with exponential backoff:
+  - Max 3 retries
+  - Delays: 1s, 2s, 4s
+  - Retry on rate limit errors and transient failures
 
 ### Step 3.2 — Create Era Naming Prompt
 Create function `build_era_prompt(era: Era) -> str`:
-- Include: date range, duration, top 5 artists with play counts, top 10 tracks
-- Prompt should ask for:
-  - A creative 2-5 word title (evocative, not generic)
-  - A 2-3 sentence summary describing the vibe/mood
-- Specify JSON output format: `{"title": "...", "summary": "..."}`
-- Include instruction: "Do not use generic titles like 'Musical Journey' or 'Eclectic Mix'"
+- Format date range as human-readable: "March 2021 - August 2021"
+- Calculate and format duration: `(end_date - start_date).days` → "5 months" or "12 weeks"
+- Format listening time: `total_ms_played // 3600000` → "47 hours"
+- Format top 5 artists with play counts: "1. Taylor Swift (156 plays)"
+- Format top 10 tracks: "1. Anti-Hero by Taylor Swift (45 plays)"
+- Prompt template:
+```
+You are analyzing someone's music listening history. Based on this era's data, create a creative title and summary.
+
+Era: {formatted_date_range} ({duration})
+Total listening time: {hours} hours
+
+Top Artists:
+{formatted_artists}
+
+Top Tracks:
+{formatted_tracks}
+
+Create a JSON response with:
+- "title": A creative, evocative 2-5 word title that captures the mood/vibe. Avoid generic titles like "Musical Journey", "Eclectic Mix", or "Summer Vibes".
+- "summary": A 2-3 sentence summary describing the musical mood, themes, or story of this era.
+
+Respond ONLY with valid JSON: {"title": "...", "summary": "..."}
+```
 
 ### Step 3.3 — Call LLM for Single Era
 Create function `name_era(era: Era) -> dict`:
-- Build prompt using build_era_prompt
-- Call LLM API with temperature ~0.7
-- Parse JSON response
+- Build prompt using `build_era_prompt(era)`
+- Call LLM API with:
+  - `temperature=0.7`
+  - `max_tokens=300`
+  - Timeout from `LLM_TIMEOUT` env var
+- Parse JSON response with fallback:
+  - Try `json.loads(response)` first
+  - If fails, try regex: `re.search(r'\{.*\}', response, re.DOTALL)` to extract JSON
+  - If still fails, return fallback
+- Fallback title format: `"Era {era.id}: {month} {year}"` (e.g., "Era 1: March 2021")
+- Fallback summary: `"A {duration} period featuring {top_artist} and more."`
 - Return `{"title": str, "summary": str}`
-- Handle errors gracefully — return fallback title if API fails
 
 ### Step 3.4 — Validate LLM Response
-Create function `validate_era_name(response: dict) -> dict`:
-- Check title length (2-50 chars)
-- Check summary length (20-500 chars)
-- Strip any quotes or special formatting
-- Return cleaned response or fallback
+Create function `validate_era_name(response: dict, era: Era) -> dict`:
+- Check "title" key exists and is non-empty string
+- Check "summary" key exists and is non-empty string
+- Clean title:
+  - Strip leading/trailing whitespace and quotes
+  - Remove newlines
+  - Truncate to 50 chars if longer
+  - If empty after cleaning, use fallback
+- Clean summary:
+  - Strip leading/trailing whitespace and quotes
+  - Collapse multiple spaces/newlines to single space
+  - Truncate to 500 chars if longer
+  - If < 20 chars after cleaning, use fallback
+- Return cleaned `{"title": str, "summary": str}` or fallback values
 
 ### Step 3.5 — Process All Eras
-Create function `name_all_eras(eras: List[Era], progress_callback) -> List[Era]`:
-- For each era:
-  - Call name_era
-  - Validate response
-  - Update era.title and era.summary
-  - Call progress_callback with percent complete
-- Return updated eras list
+Create function `name_all_eras(eras: List[Era], progress_callback: Callable[[int], None]) -> List[Era]`:
+- `progress_callback` signature: takes single int (percent 0-100), returns None
+- For each era (index i):
+  - Try to call `name_era(era)`
+  - Validate with `validate_era_name(response, era)`
+  - Update `era.title` and `era.summary`
+  - Calculate progress: `40 + int((i + 1) / len(eras) * 30)` (40% to 70%)
+  - Call `progress_callback(progress_percent)`
+  - On exception: log error, use fallback, continue to next era
+- Return updated eras list (all eras will have titles, either from LLM or fallback)
 
 ### Step 3.6 — Integrate LLM into Pipeline
-Update main processing:
-- After segmentation, call name_all_eras
-- Update progress incrementally from 40% to 70%
-- Store updated eras in session
+Extend the `/process/<session_id>` endpoint in `app.py`:
+- After segmentation succeeds (eras stored, progress at 40%):
+- Create progress callback that updates `session["progress"]["percent"]`
+- Call `name_all_eras(eras, progress_callback)`
+- Update session with named eras
+- Update progress to `{"stage": "named", "percent": 70}`
+- Continue to next phase (playlist generation)
 
 ---
 
