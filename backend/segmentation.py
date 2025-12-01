@@ -231,6 +231,39 @@ def filter_eras(eras: List[Era], min_weeks: int = 2, min_ms: int = 3600000) -> L
     return filtered
 
 
+def calculate_aggregate_stats(events: List[ListeningEvent]) -> dict:
+    """
+    Calculate aggregate statistics from listening events.
+    Call this before deleting events to preserve stats for API.
+
+    Args:
+        events: List of ListeningEvent objects
+
+    Returns:
+        Dict with total_tracks, total_artists, total_ms, and date_range
+    """
+    if not events:
+        return {
+            "total_tracks": 0,
+            "total_artists": 0,
+            "total_ms": 0,
+            "date_range": {"start": None, "end": None}
+        }
+
+    unique_tracks = set((e.track_name, e.artist_name) for e in events)
+    unique_artists = set(e.artist_name for e in events)
+
+    return {
+        "total_tracks": len(unique_tracks),
+        "total_artists": len(unique_artists),
+        "total_ms": sum(e.ms_played for e in events),
+        "date_range": {
+            "start": min(e.timestamp for e in events).date().isoformat(),
+            "end": max(e.timestamp for e in events).date().isoformat()
+        }
+    }
+
+
 def segment_listening_history(events: List[ListeningEvent]) -> List[Era]:
     """
     Main entry point for era segmentation.
