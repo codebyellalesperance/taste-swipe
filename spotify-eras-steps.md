@@ -356,56 +356,271 @@ Extend the `/process/<session_id>` endpoint in `app.py`:
 
 ## PHASE 4: Backend — Playlist Generation
 
-### Step 4.1 — Select Playlist Tracks
-In `playlist_builder.py`, create function `build_playlist(era: Era, target_count: int = 40) -> Playlist`:
-- Start with era's top_tracks
-- If fewer than target_count, that's okay
-- Cap at 50 tracks maximum
-- Create Playlist object with track list
+Note: URIs are not available in Era.top_tracks (lost during aggregation). Playlists will contain track/artist names only. Future Spotify API integration would need to search for tracks by name.
 
-### Step 4.2 — Format Track Objects
-Create function `format_track(track_name: str, artist_name: str, uri: Optional[str]) -> dict`:
-- Return `{"track_name": track_name, "artist_name": artist_name, "uri": uri}`
+### Step 4.1 — Create Playlist Builder Module
+Create `playlist_builder.py` with imports:
+```python
+from typing import List
+from models import Era, Playlist
+```
+
+### Step 4.2 — Build Playlist Function
+Create function `build_playlist(era: Era) -> Playlist`:
+- Extract tracks from era.top_tracks (already limited to 20 in segmentation)
+- Format each track as dict: `{"track_name": name, "artist_name": artist, "play_count": count}`
+- Note: URI is None since it's not preserved through aggregation
+- Create and return Playlist object with era_id and track list
+
+```python
+def build_playlist(era: Era) -> Playlist:
+    tracks = [
+        {
+            "track_name": track_name,
+            "artist_name": artist_name,
+            "play_count": count,
+            "uri": None  # Not available after aggregation
+        }
+        for track_name, artist_name, count in era.top_tracks
+    ]
+    return Playlist(era_id=era.id, tracks=tracks)
+```
 
 ### Step 4.3 — Build All Playlists
 Create function `build_all_playlists(eras: List[Era]) -> List[Playlist]`:
-- For each era, call build_playlist
+- Iterate through eras and call build_playlist for each
 - Return list of Playlist objects
 
+```python
+def build_all_playlists(eras: List[Era]) -> List[Playlist]:
+    return [build_playlist(era) for era in eras]
+```
+
 ### Step 4.4 — Integrate Playlists into Pipeline
-Update main processing:
-- After LLM naming, call build_all_playlists
-- Store playlists in session
+Update `/process/<session_id>` in `app.py`:
+- Import `build_all_playlists` from `playlist_builder`
+- After LLM naming completes (progress at 70%):
+- Update progress to `{"stage": "playlists", "percent": 80}`
+- Call `build_all_playlists(eras)`
+- Store playlists in session: `session["playlists"] = playlists`
 - Update progress to `{"stage": "complete", "percent": 100}`
+- Wrap in try/except - on failure, still mark complete but with empty playlists
 
 ---
 
 ## PHASE 5: Backend — API Endpoints
 
-### Step 5.1 — Create Summary Endpoint
+### Step 5.0 — Store Aggregate Stats Before Deleting Events
+Before deleting events in Step 2.6, calculate and store aggregate statistics that will be needed by the API:
+
+In `segmentation.py`, create function `calculate_aggregate_stats(events: List[ListeningEvent]) -> dict`:
+```python
+def calculate_aggregate_stats(events: List[ListeningEvent]) -> dict:
+    unique_tracks = set((e.track_name, e.artist_name) for e in events)
+    unique_artists = set(e.artist_name for e in events)
+    return {
+        "total_tracks": len(unique_tracks),
+        "total_artists": len(unique_artists),
+        "total_ms": sum(e.ms_played for e in events),
+        "date_range": {
+            "start": min(e.timestamp for e in events).date().isoformat(),
+            "end": max(e.timestamp for e in events).date().isoformat()
+        }
+    }
+```
+
+Update `/process/<session_id>` to call this before segmentation and store in `session["stats"]`.
+
+### Step 5.1 — Create Session Validation Helper
+Create helper function to validate session state before returning data:
+
+```python
+def validate_session_ready(session_id: str) -> Tuple[dict, Optional[Tuple[dict, int]]]:
+    """Returns (session, None) if valid, or (None, error_response) if invalid."""
+    if session_id not in sessions:
+        return None, ({"error": "Session not found"}, 404)
+
+    session = sessions[session_id]
+
+    # Update last accessed time for TTL
+    session["last_accessed"] = datetime.now()
+
+    if session["progress"]["stage"] == "error":
+        return None, ({"error": session["progress"].get("message", "Processing failed")}, 400)
+
+    if session["progress"]["stage"] != "complete":
+        return None, ({"error": "Processing not complete", "stage": session["progress"]["stage"]}, 425)
+
+    return session, None
+```
+
+### Step 5.2 — Create Serialization Helpers
+Create functions to convert dataclasses to JSON-serializable dicts:
+
+```python
+def serialize_era_summary(era: Era) -> dict:
+    """Serialize era for list view (minimal data)."""
+    return {
+        "id": era.id,
+        "title": era.title,
+        "start_date": era.start_date.isoformat(),
+        "end_date": era.end_date.isoformat(),
+        "top_artists": [{"name": name, "plays": count} for name, count in era.top_artists[:3]],
+        "playlist_track_count": len(era.top_tracks)
+    }
+
+def serialize_era_detail(era: Era, playlist: Optional[Playlist]) -> dict:
+    """Serialize era for detail view (full data)."""
+    return {
+        "id": era.id,
+        "title": era.title,
+        "summary": era.summary,
+        "start_date": era.start_date.isoformat(),
+        "end_date": era.end_date.isoformat(),
+        "total_ms_played": era.total_ms_played,
+        "top_artists": [{"name": name, "plays": count} for name, count in era.top_artists],
+        "top_tracks": [{"track": track, "artist": artist, "plays": count} for track, artist, count in era.top_tracks],
+        "playlist": {
+            "era_id": playlist.era_id,
+            "tracks": playlist.tracks
+        } if playlist else None
+    }
+```
+
+### Step 5.3 — Create Summary Endpoint
 Create `GET /session/<session_id>/summary`:
-- Return JSON with:
-  - total_eras: count
-  - date_range: {start, end}
-  - total_listening_time_ms
-  - total_tracks
-  - total_artists
+- Call `validate_session_ready()`, return error if invalid
+- Return JSON with data from `session["stats"]` and eras:
 
-### Step 5.2 — Create Eras List Endpoint
+```python
+@app.route('/session/<session_id>/summary')
+def get_summary(session_id):
+    session, error = validate_session_ready(session_id)
+    if error:
+        return jsonify(error[0]), error[1]
+
+    stats = session["stats"]
+    eras = session["eras"]
+
+    return jsonify({
+        "total_eras": len(eras),
+        "date_range": stats["date_range"],
+        "total_listening_time_ms": stats["total_ms"],
+        "total_tracks": stats["total_tracks"],
+        "total_artists": stats["total_artists"]
+    })
+```
+
+### Step 5.4 — Create Eras List Endpoint
 Create `GET /session/<session_id>/eras`:
-- Return JSON array of era summaries:
-  - id, title, start_date, end_date, top_artists (top 3 only), track_count
+- Call `validate_session_ready()`, return error if invalid
+- Return JSON array of era summaries sorted by start_date:
 
-### Step 5.3 — Create Era Detail Endpoint
+```python
+@app.route('/session/<session_id>/eras')
+def get_eras(session_id):
+    session, error = validate_session_ready(session_id)
+    if error:
+        return jsonify(error[0]), error[1]
+
+    eras = sorted(session["eras"], key=lambda e: e.start_date)
+    return jsonify([serialize_era_summary(era) for era in eras])
+```
+
+### Step 5.5 — Create Era Detail Endpoint
 Create `GET /session/<session_id>/eras/<era_id>`:
-- Return full Era object as JSON
-- Include associated playlist
+- Call `validate_session_ready()`, return error if invalid
+- Validate `era_id` is an integer, return 400 if not
+- Find era by ID, return 404 if not found
+- Find associated playlist by `era_id`
+- Return full serialized era with playlist:
 
-### Step 5.4 — Add Error Handling
-For all endpoints:
-- Return 404 if session_id not found
-- Return 404 if era_id not found
-- Return appropriate error messages as JSON
+```python
+@app.route('/session/<session_id>/eras/<era_id>')
+def get_era_detail(session_id, era_id):
+    session, error = validate_session_ready(session_id)
+    if error:
+        return jsonify(error[0]), error[1]
+
+    # Validate era_id format
+    try:
+        era_id = int(era_id)
+    except ValueError:
+        return jsonify({"error": "Invalid era_id format"}), 400
+
+    # Find era
+    era = next((e for e in session["eras"] if e.id == era_id), None)
+    if not era:
+        return jsonify({"error": "Era not found"}), 404
+
+    # Find associated playlist
+    playlist = next((p for p in session["playlists"] if p.era_id == era_id), None)
+
+    return jsonify(serialize_era_detail(era, playlist))
+```
+
+### Step 5.6 — Update Session Cleanup for Activity-Based TTL
+Update the session cleanup logic from Step 1.1 to use last access time instead of creation time:
+
+```python
+# In session creation (Step 1.2), store both timestamps:
+sessions[session_id] = {
+    "events": [],
+    "eras": [],
+    "playlists": [],
+    "stats": {},
+    "progress": {"stage": "uploading", "percent": 0},
+    "created_at": datetime.now(),
+    "last_accessed": datetime.now()
+}
+
+# In cleanup, check last_accessed instead of created_at:
+def cleanup_expired_sessions():
+    now = datetime.now()
+    expired = [
+        sid for sid, session in sessions.items()
+        if (now - session["last_accessed"]).total_seconds() > 3600  # 1 hour idle
+    ]
+    for sid in expired:
+        del sessions[sid]
+```
+
+### Step 5.7 — Add Rate Limiting (Production)
+Install `flask-limiter` and add rate limiting to prevent abuse:
+
+```python
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["100 per minute"]
+)
+
+# Apply stricter limits to expensive endpoints
+@app.route('/process/<session_id>', methods=['POST'])
+@limiter.limit("5 per minute")
+def process_session(session_id):
+    ...
+```
+
+Add `flask-limiter` to `requirements.txt`.
+
+### Step 5.8 — Error Response Consistency
+All error responses must follow this format:
+```json
+{
+    "error": "Human-readable error message"
+}
+```
+
+HTTP status codes:
+- `400` — Bad request (invalid input, invalid era_id format)
+- `404` — Not found (session or era doesn't exist)
+- `425` — Too Early (processing not complete)
+- `429` — Too Many Requests (rate limited)
+- `500` — Internal Server Error (unexpected failures)
 
 ---
 
