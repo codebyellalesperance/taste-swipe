@@ -1,9 +1,18 @@
+import fnmatch
+import io
+import os
+import zipfile
 from datetime import datetime
 from typing import List
 
 import orjson
 
 from models import ListeningEvent
+
+
+# Security limits
+MAX_EXTRACTED_SIZE = 1024 * 1024 * 1024  # 1GB max total extracted size
+STREAMING_HISTORY_PATTERN = '*Streaming_History_Audio_*.json'
 
 
 class ParseError(Exception):
@@ -72,3 +81,64 @@ def parse_spotify_json(file_content: bytes) -> List[ListeningEvent]:
         events.append(event)
 
     return events
+
+
+def parse_spotify_zip(zip_bytes: bytes) -> List[ListeningEvent]:
+    """
+    Parse a Spotify data export ZIP file.
+
+    Args:
+        zip_bytes: Raw bytes of the ZIP file
+
+    Returns:
+        List of ListeningEvent objects, sorted by timestamp
+
+    Raises:
+        ParseError: If ZIP is invalid or contains security issues
+    """
+    bytes_io = io.BytesIO(zip_bytes)
+
+    if not zipfile.is_zipfile(bytes_io):
+        raise ParseError("Invalid ZIP file")
+
+    all_events = []
+    total_extracted = 0
+
+    with zipfile.ZipFile(bytes_io, 'r') as zf:
+        for info in zf.infolist():
+            # Security: skip directories
+            if info.is_dir():
+                continue
+
+            # Security: check for path traversal
+            filename = info.filename
+            if '..' in filename or filename.startswith('/'):
+                raise ParseError(f"Invalid file path in ZIP: {filename}")
+
+            # Security: check extracted size limit
+            total_extracted += info.file_size
+            if total_extracted > MAX_EXTRACTED_SIZE:
+                raise ParseError("ZIP file too large when extracted")
+
+            # Check if file matches streaming history pattern
+            # Handle nested directories by checking just the basename
+            basename = os.path.basename(filename)
+            if not fnmatch.fnmatch(basename, STREAMING_HISTORY_PATTERN):
+                continue
+
+            # Extract and parse the JSON file
+            try:
+                file_content = zf.read(info.filename)
+                events = parse_spotify_json(file_content)
+                all_events.extend(events)
+            except ParseError:
+                # Skip files that fail to parse, continue with others
+                continue
+
+    if not all_events:
+        raise ParseError("No valid streaming history files found in ZIP")
+
+    # Sort by timestamp ascending
+    all_events.sort(key=lambda e: e.timestamp)
+
+    return all_events
