@@ -3,6 +3,7 @@ import re
 import json
 import time
 import functools
+from typing import List, Callable
 
 from models import Era
 
@@ -302,3 +303,39 @@ def validate_era_name(response: dict, era: Era) -> dict:
         summary = fallback["summary"]
 
     return {"title": title, "summary": summary}
+
+
+def name_all_eras(eras: List[Era], progress_callback: Callable[[int], None]) -> List[Era]:
+    """
+    Generate titles and summaries for all eras.
+
+    Args:
+        eras: List of Era objects to name
+        progress_callback: Function to call with progress percentage (40-70)
+
+    Returns:
+        List of Era objects with title and summary populated
+    """
+    total = len(eras)
+
+    for i, era in enumerate(eras):
+        try:
+            # Get name from LLM
+            response = name_era(era)
+            # Validate and clean
+            validated = validate_era_name(response, era)
+            # Update era
+            era.title = validated["title"]
+            era.summary = validated["summary"]
+
+        except Exception:
+            # On any error, use fallback
+            fallback = get_fallback_response(era)
+            era.title = fallback["title"]
+            era.summary = fallback["summary"]
+
+        # Update progress (40% to 70% range)
+        progress = 40 + int((i + 1) / total * 30)
+        progress_callback(progress)
+
+    return eras
