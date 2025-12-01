@@ -1,4 +1,6 @@
 import os
+import re
+import json
 import time
 import functools
 
@@ -150,3 +152,105 @@ Create a JSON response with:
 Respond ONLY with valid JSON: {{"title": "...", "summary": "..."}}"""
 
     return prompt
+
+
+def get_fallback_response(era: Era) -> dict:
+    """Generate fallback title and summary when LLM fails."""
+    month_year = era.start_date.strftime("%B %Y")
+    duration_days = (era.end_date - era.start_date).days + 1
+    duration = format_duration(duration_days)
+
+    top_artist = era.top_artists[0][0] if era.top_artists else "various artists"
+
+    return {
+        "title": f"Era {era.id}: {month_year}",
+        "summary": f"A {duration} period featuring {top_artist} and more."
+    }
+
+
+def parse_llm_response(response_text: str) -> dict:
+    """
+    Parse LLM response to extract JSON.
+
+    Args:
+        response_text: Raw response from LLM
+
+    Returns:
+        Parsed dict with title and summary, or None if parsing fails
+    """
+    # Try direct JSON parse first
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to extract JSON from response using regex
+    match = re.search(r'\{.*\}', response_text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+@retry_with_backoff(max_retries=3, base_delay=1)
+def call_llm(prompt: str) -> str:
+    """
+    Call the LLM API with the given prompt.
+
+    Args:
+        prompt: The prompt to send
+
+    Returns:
+        Response text from the LLM
+    """
+    client = get_client()
+
+    if LLM_PROVIDER == 'openai':
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+        return response.choices[0].message.content
+
+    elif LLM_PROVIDER == 'anthropic':
+        response = client.messages.create(
+            model=LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+            max_tokens=300
+        )
+        return response.content[0].text
+
+    else:
+        raise ValueError(f"Unknown LLM provider: {LLM_PROVIDER}")
+
+
+def name_era(era: Era) -> dict:
+    """
+    Generate a title and summary for an era using LLM.
+
+    Args:
+        era: Era object with listening data
+
+    Returns:
+        Dict with "title" and "summary" keys
+    """
+    try:
+        prompt = build_era_prompt(era)
+        response_text = call_llm(prompt)
+        parsed = parse_llm_response(response_text)
+
+        if parsed and "title" in parsed and "summary" in parsed:
+            return parsed
+
+        # Parsing failed, use fallback
+        return get_fallback_response(era)
+
+    except Exception:
+        # Any error, use fallback
+        return get_fallback_response(era)
