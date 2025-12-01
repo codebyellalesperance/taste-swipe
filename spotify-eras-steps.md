@@ -157,45 +157,74 @@ Create `GET /progress/<session_id>` as Server-Sent Events (SSE):
 
 ## PHASE 2: Backend — Era Segmentation
 
+### Step 2.0 — Add WeekBucket to Models
+In `models.py`, add the `WeekBucket` dataclass:
+
+```python
+from collections import Counter
+
+@dataclass
+class WeekBucket:
+    week_key: Tuple[int, int]  # (year, week_number) to handle year boundaries
+    week_start: date
+    artists: Counter  # Counter of artist_name -> play_count
+    tracks: Counter   # Counter of (track_name, artist_name) -> play_count
+    total_ms: int
+```
+
 ### Step 2.1 — Create Weekly Aggregates
 In `segmentation.py`, create function `aggregate_by_week(events: List[ListeningEvent]) -> List[WeekBucket]`:
-- Define `WeekBucket` as: `{week_start: date, artists: Counter, tracks: Counter, total_ms: int}`
-- Group events by ISO week
-- For each week, count artist plays and track plays
+- Return empty list if events is empty
+- Group events by ISO week using `event.timestamp.isocalendar()` — returns `(year, week, weekday)`
+- Use `(year, week)` tuple as week key to handle year boundary edge cases
+- Calculate `week_start` as the Monday of that ISO week
+- For each week:
+  - Count artist plays: `Counter[artist_name] -> int`
+  - Count track plays: `Counter[(track_name, artist_name)] -> int` (tuple to preserve artist association)
+  - Sum `ms_played` for total_ms
 - Return list of WeekBuckets sorted by week_start
 
 ### Step 2.2 — Calculate Artist Similarity Between Weeks
 Create function `calculate_similarity(week_a: WeekBucket, week_b: WeekBucket) -> float`:
-- Get top 20 artists from each week
-- Calculate Jaccard similarity: `|A ∩ B| / |A ∪ B|`
+- Get top N artists from each week (N = min(20, number of artists in smaller week))
+- Extract just the artist names as sets
+- Handle edge case: if union is empty, return 0.0 to avoid division by zero
+- Calculate Jaccard similarity: `len(A & B) / len(A | B)`
 - Return float between 0.0 and 1.0
 
 ### Step 2.3 — Detect Era Boundaries
 Create function `detect_era_boundaries(weeks: List[WeekBucket], threshold: float = 0.3) -> List[int]`:
-- Compare each consecutive pair of weeks
-- If similarity < threshold, mark as boundary
-- Also mark as boundary if gap > 4 weeks between data
-- Return list of week indices where new eras start
+- If weeks is empty, return empty list
+- If only 1 week, return `[0]`
 - Always include index 0 as first boundary
+- Compare each consecutive pair of weeks:
+  - Calculate gap: `(weeks[i].week_start - weeks[i-1].week_start).days`
+  - If gap > 28 days (4 weeks), mark index i as boundary (listening gap)
+  - Else if `calculate_similarity(weeks[i-1], weeks[i]) < threshold`, mark as boundary
+- Threshold 0.3 is tunable — lower = more eras, higher = fewer eras
+- Return list of week indices where new eras start
 
 ### Step 2.4 — Build Era Objects
 Create function `build_eras(weeks: List[WeekBucket], boundaries: List[int]) -> List[Era]`:
-- For each era (between boundaries):
-  - Combine all weeks' artist counts
-  - Combine all weeks' track counts
-  - Calculate total_ms_played
-  - Get top 10 artists
-  - Get top 20 tracks
-  - Set start_date = first week's start
-  - Set end_date = last week's end
-  - Leave title and summary empty (filled by LLM later)
+- If weeks is empty, return empty list
+- For each era (from boundary[i] to boundary[i+1], or to end for last era):
+  - Combine all weeks' artist Counters using `sum(counters, Counter())`
+  - Combine all weeks' track Counters similarly
+  - Sum total_ms_played from all weeks
+  - Get top 10 artists as `List[Tuple[str, int]]` using `.most_common(10)`
+  - Get top 20 tracks as `List[Tuple[str, str, int]]` — unpack the (track, artist) key and add count
+  - Set start_date = first week's `week_start`
+  - Set end_date = last week's `week_start + timedelta(days=6)` (end of that week)
+  - Leave title and summary as empty strings (filled by LLM later)
 - Return list of Era objects with sequential IDs starting at 1
 
 ### Step 2.5 — Filter Insignificant Eras
 Create function `filter_eras(eras: List[Era], min_weeks: int = 2, min_ms: int = 3600000) -> List[Era]`:
+- Calculate weeks in era: `((era.end_date - era.start_date).days // 7) + 1`
 - Remove eras shorter than min_weeks
-- Remove eras with less than min_ms (1 hour default)
-- Re-number era IDs sequentially
+- Remove eras with less than min_ms (1 hour = 3600000ms default)
+- If all eras filtered out, return empty list (don't error)
+- Re-number remaining era IDs sequentially starting at 1
 - Return filtered list
 
 ### Step 2.6 — Integrate Segmentation into Pipeline
@@ -204,12 +233,18 @@ Create function `segment_listening_history(events: List[ListeningEvent]) -> List
 - Call detect_era_boundaries
 - Call build_eras
 - Call filter_eras
-- Return final era list
+- Return final era list (may be empty)
 
-Update main processing to:
-- Call segment_listening_history after parsing
-- Store eras in session
-- Update progress to `{"stage": "segmented", "percent": 40}`
+In `app.py`, create a new endpoint `POST /process/<session_id>`:
+- Validate session exists, return 404 if not
+- Validate session has events, return 400 if not
+- Wrap processing in try/except
+- Call segment_listening_history with session events
+- On error: set progress to `{"stage": "error", "message": str(e), "percent": 0}`
+- On success with no eras: set progress to `{"stage": "error", "message": "No distinct eras found", "percent": 0}`
+- On success: store eras in session, update progress to `{"stage": "segmented", "percent": 40}`
+- Optionally: delete `sessions[session_id]["events"]` after segmentation to free memory
+- Return `{"status": "ok"}` or error JSON
 
 ---
 
