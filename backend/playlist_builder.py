@@ -23,3 +23,16 @@ def build_playlist(era: Era) -> Playlist:
         for track_name, artist_name, count in era.top_tracks
     ]
     return Playlist(era_id=era.id, tracks=tracks)
+
+
+def build_all_playlists(eras: List[Era]) -> List[Playlist]:
+    """
+    Build playlists for all eras.
+
+    Args:
+        eras: List of Era objects
+
+    Returns:
+        List of Playlist objects, one per era
+    """
+    return [build_playlist(era) for era in eras]
