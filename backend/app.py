@@ -5,6 +5,8 @@ from uuid import uuid4
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+from parser import parse_spotify_json, parse_spotify_zip, ParseError
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -41,9 +43,14 @@ def health():
 ZIP_MAGIC = b'PK\x03\x04'
 
 
+def is_zip_file(file_bytes):
+    """Check if file is a ZIP by magic bytes."""
+    return file_bytes[:4] == ZIP_MAGIC
+
+
 def is_valid_file_type(file_bytes, filename):
     """Check if file is a valid ZIP or JSON file."""
-    is_zip = file_bytes[:4] == ZIP_MAGIC
+    is_zip = is_zip_file(file_bytes)
     is_json_ext = filename.lower().endswith('.json')
     is_zip_ext = filename.lower().endswith('.zip')
     return is_zip or is_json_ext or is_zip_ext
@@ -71,10 +78,25 @@ def upload():
         "eras": [],
         "playlists": [],
         "progress": {"stage": "uploading", "percent": 0},
-        "created_at": datetime.now(),
-        "file_bytes": file_bytes,
-        "filename": file.filename
+        "created_at": datetime.now()
     }
+
+    # Parse the file
+    try:
+        if is_zip_file(file_bytes):
+            events = parse_spotify_zip(file_bytes)
+        else:
+            events = parse_spotify_json(file_bytes)
+    except ParseError as e:
+        del sessions[session_id]
+        return jsonify({"error": f"Failed to parse file: {e}"}), 400
+
+    if not events:
+        del sessions[session_id]
+        return jsonify({"error": "No listening history found in file"}), 400
+
+    sessions[session_id]["events"] = events
+    sessions[session_id]["progress"] = {"stage": "parsed", "percent": 20}
 
     return jsonify({"session_id": session_id})
 
