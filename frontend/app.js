@@ -322,42 +322,55 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Cards rendered');
     });
 
-    // Manual action buttons
-    document.getElementById('like-btn').addEventListener('click', () => {
-        const topCard = document.querySelector('.song-card');
-        if (topCard) {
-            swipeRight(topCard);
-        }
-    });
+    // Manual action buttons (in swipe view)
+    const likeBtn = document.getElementById('like-btn');
+    const dislikeBtn = document.getElementById('dislike-btn');
 
-    document.getElementById('dislike-btn').addEventListener('click', () => {
-        const topCard = document.querySelector('.song-card');
-        if (topCard) {
-            swipeLeft(topCard);
-        }
-    });
+    if (likeBtn) {
+        likeBtn.addEventListener('click', () => {
+            const topCard = document.querySelector('.song-card');
+            if (topCard) {
+                swipeRight(topCard);
+            }
+        });
+    }
 
-    // Share button (placeholder)
-    document.getElementById('share-btn').addEventListener('click', () => {
-        const message = `I just discovered ${state.likedSongs.length} new songs on TasteSwipe! 🎵✨`;
+    if (dislikeBtn) {
+        dislikeBtn.addEventListener('click', () => {
+            const topCard = document.querySelector('.song-card');
+            if (topCard) {
+                swipeLeft(topCard);
+            }
+        });
+    }
 
-        if (navigator.share) {
-            navigator.share({
-                title: 'My TasteSwipe Daylist',
-                text: message
-            }).catch(() => { });
-        } else {
-            // Fallback: copy to clipboard
-            navigator.clipboard.writeText(message).then(() => {
-                alert('✅ Copied to clipboard!');
-            });
-        }
-    });
+    // Share button (in results view)
+    const shareBtn = document.getElementById('share-btn');
+    if (shareBtn) {
+        shareBtn.addEventListener('click', () => {
+            const message = `I just discovered ${state.likedSongs.length} new songs on TasteSwipe! 🎵✨`;
 
-    // Come back tomorrow button
-    document.getElementById('comeback-btn').addEventListener('click', () => {
-        showView('landing');
-    });
+            if (navigator.share) {
+                navigator.share({
+                    title: 'My TasteSwipe Daylist',
+                    text: message
+                }).catch(() => { });
+            } else {
+                // Fallback: copy to clipboard
+                navigator.clipboard.writeText(message).then(() => {
+                    alert('✅ Copied to clipboard!');
+                });
+            }
+        });
+    }
+
+    // Come back tomorrow button (in results view)
+    const comebackBtn = document.getElementById('comeback-btn');
+    if (comebackBtn) {
+        comebackBtn.addEventListener('click', () => {
+            showView('landing');
+        });
+    }
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
