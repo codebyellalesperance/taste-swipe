@@ -148,11 +148,13 @@ def init_spotify_routes(app):
             session['user_id'] = user_profile['id']
             session['display_name'] = user_profile.get('display_name', 'User')
             
-            # Redirect back to frontend
-            return redirect('/?logged_in=true')
+            # Redirect back to frontend (not backend!)
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8000')
+            return redirect(f'{frontend_url}/?logged_in=true')
             
         except Exception as e:
-            return redirect(f'/?error=auth_failed&message={str(e)}')
+            frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8000')
+            return redirect(f'{frontend_url}/?error=auth_failed&message={str(e)}')
     
     @app.route('/auth/me')
     def get_current_user():
@@ -179,4 +181,5 @@ def init_spotify_routes(app):
     def logout():
         """Clear session and logout"""
         session.clear()
-        return redirect('/')
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:8000')
+        return redirect(frontend_url)
