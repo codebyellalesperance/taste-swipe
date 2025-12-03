@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page Not Found - TasteSwipe</title>
+    <link rel="stylesheet" href="design-system.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
+            padding: var(--space-6);
+        }
+
+        .error-container {
+            max-width: 500px;
+        }
+
+        .error-code {
+            font-size: 8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--spotify-green) 0%, var(--neon-green) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1;
+            margin-bottom: var(--space-4);
+        }
+
+        .error-message {
+            font-size: 1.5rem;
+            color: var(--white);
+            margin-bottom: var(--space-3);
+        }
+
+        .error-description {
+            color: var(--silver);
+            margin-bottom: var(--space-8);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="error-container">
+        <div class="error-code">404</div>
+        <h1 class="error-message">Page Not Found</h1>
+        <p class="error-description">
+            The page you're looking for doesn't exist. It might have been moved or deleted.
+        </p>
+        <a href="/" class="btn btn-primary">Back to Home</a>
+    </div>
+</body>
+
+</html>

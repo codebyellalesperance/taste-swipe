@@ -6,3 +6,4 @@ orjson
 gunicorn
 openai
 requests
+gunicorn>=21.2.0

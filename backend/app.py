@@ -1,4 +1,6 @@
 import os
+import logging
+import sys
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from uuid import uuid4
@@ -18,9 +20,34 @@ from typing import Optional, Tuple
 
 load_dotenv()
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO if os.getenv('FLASK_ENV') == 'production' else logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('tasteswipe.log') if os.getenv('FLASK_ENV') == 'production' else logging.NullHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# Environment detection
+IS_PRODUCTION = os.getenv('FLASK_ENV') == 'production'
+IS_DEVELOPMENT = os.getenv('FLASK_ENV') == 'development'
+
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
-app.secret_key = os.getenv('SECRET_KEY', os.urandom(24))  # For session management
+
+# Secure session configuration
+app.config.update(
+    SECRET_KEY=os.getenv('SECRET_KEY', os.urandom(24)),
+    SESSION_COOKIE_SECURE=IS_PRODUCTION,  # HTTPS only in production
+    SESSION_COOKIE_HTTPONLY=True,  # Prevent JavaScript access
+    SESSION_COOKIE_SAMESITE='Lax',  # CSRF protection
+    PERMANENT_SESSION_LIFETIME=timedelta(days=7)
+)
+
+logger.info(f"Starting TasteSwipe in {'PRODUCTION' if IS_PRODUCTION else 'DEVELOPMENT'} mode")
 
 # Import Spotify modules
 from spotify_auth import init_spotify_routes
@@ -33,24 +60,118 @@ from spotify_service import (
 # Initialize Spotify OAuth routes
 init_spotify_routes(app)
 
-# CORS configuration
-allowed_origins = os.getenv('ALLOWED_ORIGINS', '*').split(',')
+# CORS configuration - Strict in production
+if IS_PRODUCTION:
+    allowed_origins = os.getenv('ALLOWED_ORIGINS', '').split(',')
+    if not allowed_origins or allowed_origins == ['']:
+        logger.warning("No ALLOWED_ORIGINS set in production!")
+        allowed_origins = []
+else:
+    allowed_origins = ['http://localhost:8000', 'http://127.0.0.1:8000']
+
 CORS(app, origins=allowed_origins, supports_credentials=True)
+logger.info(f"CORS enabled for origins: {allowed_origins}")
 
 # Rate limiting
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["100 per minute"],
+    default_limits=["200 per minute"] if IS_DEVELOPMENT else ["100 per minute"],
     storage_uri="memory://"
 )
 
 # In-memory session store
 sessions = {}
 
+# Security headers middleware
+@app.after_request
+def set_security_headers(response):
+    """Add security headers to all responses"""
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' https://accounts.spotify.com; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self' https://api.spotify.com https://accounts.spotify.com; "
+        "font-src 'self' data:; "
+        "frame-ancestors 'none';"
+    )
+    return response
+
+# Error handling
+@app.errorhandler(404)
+def not_found(error):
+    """Handle 404 errors"""
+    logger.warning(f"404 error: {request.url}")
+    return jsonify({'error': 'Resource not found'}), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    """Handle 500 errors"""
+    logger.error(f"500 error: {str(error)}", exc_info=True)
+    return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(Exception)
+def handle_exception(error):
+    """Handle all other exceptions"""
+    logger.error(f"Unhandled exception: {str(error)}", exc_info=True)
+    return jsonify({'error': 'An unexpected error occurred'}), 500
+
 # Session cleanup settings
 SESSION_MAX_AGE = timedelta(hours=1)
 
+
+# ===========================================================================
+# HEALTH & MONITORING ENDPOINTS
+# ===========================================================================
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for load balancers and monitoring"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.utcnow().isoformat(),
+        'version': '1.0.0'
+    }), 200
+
+
+@app.route('/ready', methods=['GET'])
+def readiness_check():
+    """Readiness check - verifies app can handle requests"""
+    try:
+        # Check if critical services are available
+        checks = {
+            'sessions': len(sessions) >= 0,  # Session store accessible
+            'env_vars': bool(os.getenv('SPOTIFY_CLIENT_ID'))  # Config loaded
+        }
+        
+        if all(checks.values()):
+            return jsonify({
+                'status': 'ready',
+                'checks': checks,
+                'timestamp': datetime.utcnow().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                'status': 'not_ready',
+                'checks': checks,
+                'timestamp': datetime.utcnow().isoformat()
+            }), 503
+    except Exception as e:
+        logger.error(f"Readiness check failed: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 503
+
+
+# ===========================================================================
+# SESSION MANAGEMENT
+# ===========================================================================
 
 def cleanup_old_sessions():
     """Remove sessions that have been idle longer than SESSION_MAX_AGE."""
@@ -61,6 +182,8 @@ def cleanup_old_sessions():
     ]
     for sid in expired:
         del sessions[sid]
+    if expired:
+        logger.info(f"Cleaned up {len(expired)} expired sessions")
 
 
 def validate_session_ready(session_id: str) -> Tuple[Optional[dict], Optional[Tuple[dict, int]]]:
