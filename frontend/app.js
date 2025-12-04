@@ -177,7 +177,7 @@ function completeSession() {
 async function checkAuthStatus() {
     /**Check if user is logged in with Spotify*/
     try {
-        const response = await fetch('http://localhost:5001/auth/me', {
+        const response = await fetch('/auth/me', {
             credentials: 'include'
         });
 
@@ -249,7 +249,7 @@ function updateUIForLoggedOutUser() {
 async function fetchSpotifyRecommendations() {
     /**Fetch real recommendations from Spotify API*/
     try {
-        const response = await fetch('http://localhost:5001/api/recommendations', {
+        const response = await fetch('/api/recommendations', {
             credentials: 'include'
         });
 
@@ -269,7 +269,7 @@ async function fetchSpotifyRecommendations() {
 async function savePlaylistToSpotify(liked_tracks, disliked_tracks = []) {
     /**Create Spotify playlist from liked songs*/
     try {
-        const response = await fetch('http://localhost:5001/api/playlist/create', {
+        const response = await fetch('/api/playlist/create', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -515,7 +515,7 @@ function showResults() {
 async function fetchTasteAnalysis() {
     /**Fetch AI-powered taste analysis*/
     try {
-        const response = await fetch('http://localhost:5001/api/taste-analysis', {
+        const response = await fetch('/api/taste-analysis', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -606,7 +606,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (loginBtn) {
         loginBtn.addEventListener('click', () => {
             console.log('Redirecting to Spotify login...');
-            window.location.href = 'http://localhost:5001/auth/login';
+            window.location.href = '/auth/login';
         });
     }
 
@@ -614,7 +614,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const logoutBtn = document.getElementById('logout-btn');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', async () => {
-            await fetch('http://localhost:5001/auth/logout', { credentials: 'include' });
+            await fetch('/auth/logout', { credentials: 'include' });
             state.isLoggedIn = false;
             state.user = null;
             updateUIForLoggedOutUser();
