@@ -5,13 +5,14 @@ Handles recommendations, playlists, and user data
 
 import requests
 from flask import session
+from backend.spotify_auth import get_valid_token
 
 SPOTIFY_API_BASE = 'https://api.spotify.com/v1'
 
 
 def get_spotify_headers():
     """Get auth headers with access token"""
-    access_token = session.get('access_token')
+    access_token = get_valid_token()
     if not access_token:
         raise Exception('Not authenticated')
     

@@ -45,13 +45,13 @@
 - [ ] **cdn**: cloudflare (free tier available)
 
 ### compliance & legal (required)
-- [ ] **privacy policy**: required for spotify oauth
-- [ ] **terms of service**: legal requirement
+- [x] **privacy policy**: required for spotify oauth
+- [x] **terms of service**: legal requirement
 - [ ] **cookie consent**: gdpr/ccpa compliance banner
 - [ ] **user data deletion**: allow users to delete their data
 
 ### missing backend features
-- [ ] **token refresh**: automatic spotify token refresh
+- [x] **token refresh**: automatic spotify token refresh
 - [ ] **api versioning**: add /v1/ prefix to endpoints
 - [ ] **email verification**: if collecting emails
 

@@ -7,6 +7,7 @@ import os
 import base64
 import secrets
 import requests
+import time
 from urllib.parse import urlencode
 from flask import redirect, request, jsonify, session
 from dotenv import load_dotenv
@@ -97,6 +98,39 @@ def refresh_access_token(refresh_token):
     return response.json()
 
 
+def get_valid_token():
+    """Get a valid access token, refreshing if necessary"""
+    access_token = session.get('access_token')
+    refresh_token = session.get('refresh_token')
+    expires_at = session.get('token_expires_at')
+    
+    if not access_token or not refresh_token:
+        return None
+        
+    # Check if token is expired or about to expire (within 5 minutes)
+    # expires_at should be a timestamp
+    if expires_at and time.time() > (expires_at - 300):
+        try:
+            token_data = refresh_access_token(refresh_token)
+            
+            # Update session with new token
+            session['access_token'] = token_data['access_token']
+            # Some refresh calls return a new refresh token, some don't
+            if 'refresh_token' in token_data:
+                session['refresh_token'] = token_data['refresh_token']
+            
+            # Update expiration
+            session['token_expires_at'] = time.time() + token_data['expires_in']
+            
+            return token_data['access_token']
+        except Exception as e:
+            # Refresh failed, user needs to login again
+            session.clear()
+            return None
+            
+    return access_token
+
+
 def get_user_profile(access_token):
     """Get current user's profile"""
     headers = {'Authorization': f'Bearer {access_token}'}
@@ -141,7 +175,8 @@ def init_spotify_routes(app):
             # Store tokens in session
             session['access_token'] = token_data['access_token']
             session['refresh_token'] = token_data['refresh_token']
-            session['token_expires_at'] = token_data['expires_in']
+            # Store absolute expiration time
+            session['token_expires_at'] = time.time() + token_data['expires_in']
             
             # Get user profile
             user_profile = get_user_profile(token_data['access_token'])
@@ -159,7 +194,7 @@ def init_spotify_routes(app):
     @app.route('/auth/me')
     def get_current_user():
         """Get current authenticated user"""
-        access_token = session.get('access_token')
+        access_token = get_valid_token()
         if not access_token:
             return jsonify({'logged_in': False}), 401
         
