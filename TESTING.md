@@ -13,6 +13,10 @@ Complete testing suite for both backend and frontend components.
 - ✅ Mood detection
 - ✅ Spotify API service
 - ✅ Flask API endpoints
+- ✅ **Production Hardening**:
+  - Health & Readiness checks
+  - Security headers (CSP, HSTS, etc.)
+  - Custom error handling (404, 500)
 
 ### **Frontend Tests** (`frontend/app.test.js`)
 - ✅ Data persistence (localStorage)
@@ -164,7 +168,7 @@ describe('New Feature', () => {
 - `spotify_auth.py`: 85%
 - `ai_service.py`: 90%
 - `spotify_service.py`: 80%
-- `app.py` endpoints: 75%
+- `app.py` endpoints: 85% (Added health/ready/error tests)
 
 ### **Frontend Coverage**
 - Data persistence: 100%

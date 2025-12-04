@@ -252,28 +252,26 @@ class TestAPIEndpoints:
     def test_api_recommendations_endpoint(self, client):
         """Test recommendations API endpoint"""
         with patch('backend.spotify_service.get_recommendations') as mock_rec:
-            with patch('backend.app.session') as mock_session:
-                mock_session.get.return_value = 'test_token'
-                mock_rec.return_value = [
-                    {
-                        'id': '1',
-                        'track': 'Test Song',
-                        'artist': 'Test Artist',
-                        'uri': 'spotify:track:1',
-                        'preview_url': None,
-                        'image': 'test.jpg',
-                        'genre': ['pop']
-                    }
-                ]
-                
-                # Mock session
-                with client.session_transaction() as sess:
-                    sess['access_token'] = 'test_token'
-                
-                response = client.get('/api/recommendations')
-                
-                # Should succeed with mocked data
-                assert response.status_code in [200, 500]  # Accept both for now
+            mock_rec.return_value = [
+                {
+                    'id': '1',
+                    'track': 'Test Song',
+                    'artist': 'Test Artist',
+                    'uri': 'spotify:track:1',
+                    'preview_url': None,
+                    'image': 'test.jpg',
+                    'genre': ['pop']
+                }
+            ]
+            
+            # Mock session
+            with client.session_transaction() as sess:
+                sess['access_token'] = 'test_token'
+            
+            response = client.get('/api/recommendations')
+            
+            # Should succeed with mocked data
+            assert response.status_code in [200, 500]  # Accept both for now
     
     def test_api_taste_analysis_endpoint(self, client):
         """Test taste analysis API endpoint"""
@@ -305,6 +303,60 @@ class TestAPIEndpoints:
         response = client.post('/api/taste-analysis', json={})
         data = json.loads(response.data)
         assert 'taste' in data  # Should handle gracefully
+
+
+# Test Production Hardening
+class TestProductionHardening:
+    """Test production readiness features"""
+
+    @pytest.fixture
+    def client(self):
+        """Create test client"""
+        from backend.app import app
+        app.config['TESTING'] = True
+        with app.test_client() as client:
+            yield client
+
+    def test_health_check(self, client):
+        """Test health check endpoint"""
+        response = client.get('/health')
+        data = json.loads(response.data)
+        
+        assert response.status_code == 200
+        assert data['status'] == 'healthy'
+        assert 'timestamp' in data
+        assert 'version' in data
+
+    def test_readiness_check(self, client):
+        """Test readiness check endpoint"""
+        response = client.get('/ready')
+        data = json.loads(response.data)
+        
+        # It might be 200 or 503 depending on env vars, but structure should be correct
+        assert response.status_code in [200, 503]
+        assert 'status' in data
+        assert 'checks' in data
+        assert 'timestamp' in data
+
+    def test_security_headers(self, client):
+        """Test security headers are present"""
+        response = client.get('/health')
+        
+        headers = response.headers
+        assert headers['X-Content-Type-Options'] == 'nosniff'
+        assert headers['X-Frame-Options'] == 'DENY'
+        assert headers['X-XSS-Protection'] == '1; mode=block'
+        assert 'Content-Security-Policy' in headers
+        assert 'Strict-Transport-Security' in headers
+
+    def test_404_handler(self, client):
+        """Test custom 404 error handler"""
+        response = client.get('/non-existent-route')
+        data = json.loads(response.data)
+        
+        assert response.status_code == 404
+        assert 'error' in data
+        assert data['error'] == 'Resource not found'
 
 
 # Test Edge Cases
