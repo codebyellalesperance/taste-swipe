@@ -179,6 +179,7 @@ class TestSpotifyService:
             with app.test_request_context():
                 from flask import session
                 session['access_token'] = 'test_token'
+                session['refresh_token'] = 'test_refresh_token'
                 
                 mock_response = Mock()
                 mock_response.status_code = 200
@@ -205,6 +206,7 @@ class TestSpotifyService:
             with app.test_request_context():
                 from flask import session
                 session['access_token'] = 'test_token'
+                session['refresh_token'] = 'test_refresh_token'
                 
                 mock_response = Mock()
                 mock_response.status_code = 200
